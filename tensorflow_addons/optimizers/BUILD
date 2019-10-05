@@ -7,6 +7,7 @@ py_library(
     srcs = [
         "__init__.py",
         "average_wrapper.py",
+	"adafactor.py",
         "conditional_gradient.py",
         "cyclical_learning_rate.py",
         "lamb.py",
@@ -44,6 +45,19 @@ py_test(
         "yogi_test.py",
     ],
     main = "yogi_test.py",
+    deps = [
+        ":optimizers",
+    ],
+)
+
+py_test(
+    name = "adafactor_test",
+    size = "small",
+    srcs = [
+        "adafactor_test.py",
+    ],
+    main = "adafactor_test.py",
+    srcs_version = "PY2AND3",
     deps = [
         ":optimizers",
     ],
