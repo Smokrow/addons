@@ -11,7 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# ==============================================================================from __future__ import absolute_import
+# ==============================================================================
+from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
@@ -20,9 +21,26 @@ from tensorflow_addons.utils import test_utils
 import numpy as np
 from adafactor import AdafactorOptimizer    
 
-class AdafactorOptimizerTest(tf.test.TestCase):
-    def basic_test(self):
-        a = adafactor()
+class AdafactorTest(tf.test.TestCase):
+    def test_setup(self):
+        a = AdafactorOptimizer()
+        return
+    def test_basic_usage(self):
+        x = np.random.rand(100,28,28)
+        y = np.random.rand(100,10)
+        model = tf.keras.Sequential([
+        tf.keras.layers.Flatten(input_shape=(28, 28)),
+        tf.keras.layers.Dense(128, activation='relu'),
+        tf.keras.layers.Dense(10, activation='softmax')
+        ])
+        optimizer = AdafactorOptimizer()
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print(optimizer.iterations)
+        model.compile(optimizer=optimizer,loss=tf.keras.losses.SparseCategoricalCrossentropy())
+        model.fit(x = x, y = y, epochs=10)
+
+        return
+
 
 if __name__ == "__main__":
     tf.test.main()
