@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Optimization."""
+"""Orginally implementation from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/utils/adafactor.py """
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -125,15 +126,15 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
         """
         super(AdafactorOptimizer, self).__init__(name=name, **kwargs)
         self._multiply_by_parameter_scale = multiply_by_parameter_scale
-        #TODO
+
         if learning_rate is None:
             learning_rate = self._learning_rate_default(multiply_by_parameter_scale)
         self._learning_rate = learning_rate
-        #TODO
-        self.decay_rate=1
-        #if decay_rate is None:
-        #    decay_rate = self._decay_rate_default()
+
+        if decay_rate is None:
+            decay_rate = self._decay_rate_default()
         self._decay_rate = decay_rate
+
         self._beta1 = beta1
         self._clipping_threshold = clipping_threshold
         self._factored = factored
@@ -170,11 +171,11 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
             if self._should_use_factored_second_moment_estimate(shape):
                 r_val = tf.zeros(shape[:-1], dtype=tf.float32)
                 c_val = tf.zeros(shape[:-2] + shape[-1:], dtype=tf.float32)
-                self.add_slot(var, "vr")
-                self.add_slot(var, "vc")
+                self.add_slot(var, "vr", initializer=r_val)
+                self.add_slot(var, "vc", initializer=c_val)
             else:
                 v_val = tf.zeros(shape, dtype=tf.float32)
-                self.add_slot(var, "v")
+                self.add_slot(var, "v", initializer=v_val)
 
     def _apply_dense(self, grad, var):
         return self._resource_apply_dense(grad, var)
@@ -213,8 +214,6 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
         old_val = var
         if self._multiply_by_parameter_scale:
             scale_factor = self._parameter_scale(old_val)
-            print("_------------------------___________________________________________-------_________________-----______------_")
-            print(update_scale)
             update_scale *= tf.cast(scale_factor, tf.float32)
         # HACK: Make things dependent on grad.
         # This confounds the XLA rewriter and keeps it from fusing computations
@@ -228,14 +227,17 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
         updates = []
         if self._should_use_factored_second_moment_estimate(shape):
             grad_squared_row_mean = tf.reduce_mean(grad_squared, -1)
-            grad_squared_col_mean = tf.reduce_mean(grad_squared, -2)
             vr = self.get_slot(var, "vr")
             new_vr = (decay_rate * vr + mixing_rate * grad_squared_row_mean)
+            vr_update = vr.assign(new_vr, use_locking=self._use_locking)
+            updates.append(vr_update)
+
+            grad_squared_col_mean = tf.reduce_mean(grad_squared, -2)
             vc = self.get_slot(var, "vc")
             new_vc = (decay_rate * vc + mixing_rate * grad_squared_col_mean)
-            vr_update = tf.assign(vr, new_vr, use_locking=self._use_locking)
-            vc_update = tf.assign(vc, new_vc, use_locking=self._use_locking)
-            updates = [vr_update, vc_update]
+            vc_update = vc.assign(new_vc, use_locking=self._use_locking)
+            updates.append(vc_update)
+
             long_term_mean = tf.reduce_mean(new_vr, -1, keepdims=True)
             r_factor = tf.math.rsqrt(new_vr / long_term_mean)
             c_factor = tf.math.rsqrt(new_vc)
@@ -243,21 +245,26 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
         else:
             v = self.get_slot(var, "v")
             new_v = decay_rate * v + mixing_rate * grad_squared
-            v_update = tf.assign(v, new_v, use_locking=self._use_locking)
+            v_update = v.assign(new_v, use_locking=self._use_locking)
             updates = [v_update]
             x = grad * tf.math.rsqrt(new_v)
+
         if self._clipping_threshold is not None:
             clipping_denom = tf.maximum(1.0, reduce_rms(x) / self._clipping_threshold)
             x /= clipping_denom
         subtrahend = update_scale * x
+
         if self._beta1:
             m = self.get_slot(var, "m")
             new_m = self._beta1 * tf.to_float(m) + (1.0 - self._beta1) * subtrahend
             subtrahend = new_m
             new_m = self._cast_like(new_m, var)
-            updates.append(tf.assign(m, new_m, use_locking=self._use_locking))
-        new_val = tf.to_float(old_val) - subtrahend
-        updates = [var_update] + updates
+            m_update_value = m.assign(new_m, use_locking=self._use_locking)
+            updates.append(m_update_value)
+
+        new_val = tf.cast(old_val,tf.float32) - subtrahend
+        new_val = var.assign(new_val, use_locking=self._use_locking)
+        updates = [new_val] + updates
         return tf.group(*updates)
 
     def _cast_like(self,x, y):
@@ -280,7 +287,7 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
             return cast_x
 
     def _decay_rate_default(self):
-        return adafactor_decay_rate_pow(0.8)
+        return self._adafactor_decay_rate_pow(0.8)
 
     def _learning_rate_default(self, multiply_by_parameter_scale):
         learning_rate = tf.minimum(tf.math.rsqrt(self.step_num() + 1.0), 0.01)
@@ -289,20 +296,20 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
         return learning_rate
 
 
-    def adafactor_decay_rate_adam(self, beta2):
+    def _adafactor_decay_rate_adam(self, beta2):
         """Second-moment decay rate like Adam, subsuming the correction factor.
         Args:
             beta2: a float between 0 and 1
         Returns:
             a scalar
         """
-        t = tf.to_float(self.iterations) + 1.0
+        t = tf.cast(self.iterations,tf.float32) + 1.0
         decay = beta2 * (1.0 - tf.pow(beta2, t - 1.0)) / (1.0 - tf.pow(beta2, t))
         # decay = tf.cond(tf.equal(t, 1.0), lambda: beta2, lambda: decay)
         return decay
 
 
-    def adafactor_decay_rate_pow(self, exponent):
+    def _adafactor_decay_rate_pow(self, exponent):
         """Second moment decay rate where memory-length grows as step_num^exponent.
         Args:
             exponent: a float between 0 and 1
@@ -327,7 +334,7 @@ def adafactor_optimizer_from_hparams(hparams, lr):
         ValueError: on illegal values
     """
     if hparams.optimizer_adafactor_decay_type == "adam":
-        decay_rate = adafactor_decay_rate_adam(
+        decay_rate = self._adafactor_decay_rate_adam(
                 hparams.optimizer_adafactor_beta2)
     elif hparams.optimizer_adafactor_decay_type == "pow":
         decay_rate = adafactor_decay_rate_pow(

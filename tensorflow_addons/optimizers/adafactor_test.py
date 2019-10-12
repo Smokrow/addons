@@ -25,21 +25,42 @@ class AdafactorTest(tf.test.TestCase):
     def test_setup(self):
         a = AdafactorOptimizer()
         return
+    @test_utils.run_in_graph_and_eager_modes(reset_test=True)
     def test_basic_usage(self):
-        x = np.random.rand(100,28,28)
-        y = np.random.rand(100,10)
+        mnist = tf.keras.datasets.mnist
+        (x_train, y_train),(x_test, y_test) = mnist.load_data()
+        x_train, x_test = x_train / 255.0, x_test / 255.0
+        model = tf.keras.models.Sequential([
+          tf.keras.layers.Flatten(input_shape=(28, 28)),
+          tf.keras.layers.Dense(128, activation='relu'),
+          tf.keras.layers.Dense(10, activation='softmax')
+        ])
+        optimizer = tf.keras.optimizers.Adam()
+        optimizer = AdafactorOptimizer()
+        #model.compile(optimizer=optimizer,loss="mean_squared_error")
+        model.compile(optimizer=optimizer,
+              loss='sparse_categorical_crossentropy',
+              metrics=['accuracy'])
+        model.fit(x_train, y_train, epochs=10)
+        return
+    
+    def gradient_tape(self):
+        x = np.random.rand(1,2,2)
+        y = np.random.rand(1,1)
         model = tf.keras.Sequential([
-        tf.keras.layers.Flatten(input_shape=(28, 28)),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dense(10, activation='softmax')
+        tf.keras.layers.Flatten(input_shape=(2, 2)),
+        tf.keras.layers.Dense(1, activation='softmax')
         ])
         optimizer = AdafactorOptimizer()
-        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        print(optimizer.iterations)
-        model.compile(optimizer=optimizer,loss=tf.keras.losses.SparseCategoricalCrossentropy())
-        model.fit(x = x, y = y, epochs=10)
+        with tf.GradientTape() as tape:
+            predictions = model(x)
+            loss = tf.keras.losses.mean_squared_error(y, predictions)
+        print(loss)
+        gradients = tape.gradient(loss, model.trainable_variables)
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print(gradients)
 
-        return
+
 
 
 if __name__ == "__main__":
