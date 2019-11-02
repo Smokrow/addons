@@ -126,30 +126,46 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
         """
         super(AdafactorOptimizer, self).__init__(name=name, **kwargs)
         self._multiply_by_parameter_scale = multiply_by_parameter_scale
+        self._set_hyper("multiply_by_parameter_scale",multiply_by_parameter_scale)
 
         if learning_rate is None:
             learning_rate = self._learning_rate_default(multiply_by_parameter_scale)
         self._learning_rate = learning_rate
+        self._set_hyper("learning_rate",learning_rate)
 
         if decay_rate is None:
             decay_rate = self._decay_rate_default()
         self._decay_rate = decay_rate
-
+        self._set_hyper("decay_rate",decay_rate)
         self._beta1 = beta1
+        self._set_hyper('beta1',beta1)
         self._clipping_threshold = clipping_threshold
+        self._set_hyper("clipping_threshold",clipping_threshold)
         self._factored = factored
+        self._set_hyper("factored",factored)
         self._simulated_quantize_bits = simulated_quantize_bits
+        self._set_hyper("simulated_quantize_bits", simulated_quantize_bits)
         self._parameter_encoding = parameter_encoding
+        self._set_hyper("parameter_encoding",parameter_encoding)
         self._epsilon1 = epsilon1
+        self._set_hyper("epsilon1",epsilon1)
         self._epsilon2 = epsilon2
+        self._set_hyper("epsilon2",epsilon2)
 
     def get_config(self):
         config = {
-            'learning_rate': self._serialize_hyperparameter('learning_rate'),
-            'lambda_': self._serialize_hyperparameter('lambda_'),
-            'use_locking': self._serialize_hyperparameter('use_locking')
+                "learning_rate": self._serialize_hyperparameter("learning_rate"),
+                "multiply_by_parameter_scale": self._serialize_hyperparameter("multiply_by_parameter_scale"),
+                "decay_rate": self._serialize_hyperparameter("decay_rate"),
+                "beta1": self._serialize_hyperparameter("beta1"),
+                "clipping_threshold": self._serialize_hyperparameter("clipping_threshold"),
+                "factored": self._serialize_hyperparameter("factored"),
+                "simulated_parameter_quantize_bits": self._serialize_hyperparameter("simulated_quantize_bits"),
+                "parameter_encoding": self._serialize_hyperparameter("parameter_encoding"),
+                "epsilon1": self._serialize_hyperparameter("epsilon1"),
+                "epsilon2": self._serialize_hyperparameter("epsilon2")
         }
-        base_config = super(ConditionalGradient, self).get_config()
+        base_config = super(AdafactorOptimizer, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
     def _should_use_factored_second_moment_estimate(self, shape):
@@ -358,7 +374,6 @@ def adafactor_optimizer_from_hparams(hparams, lr):
             parameter_encoding=parameter_encoding,
             use_locking=False,
             name="Adafactor")
-
 
 def reduce_rms(x):
     return tf.math.sqrt(tf.reduce_mean(tf.square(x)))
