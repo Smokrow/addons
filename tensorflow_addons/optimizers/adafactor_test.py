@@ -23,6 +23,7 @@ import numpy as np
 from adafactor import AdafactorOptimizer    
 
 class AdafactorTest(tf.test.TestCase):
+    @test_utils.run_in_graph_and_eager_modes(reset_test=True)
     def test_setup(self):
         a = AdafactorOptimizer()
         return
@@ -39,7 +40,7 @@ class AdafactorTest(tf.test.TestCase):
         ])
 
         optimizer = AdafactorOptimizer()
-        model.compile(optimizer=optimizer,
+        model.compile(optimizer= optimizer,
               loss='mean_squared_error',
               metrics=['accuracy'])
         model.fit(x_train, y_train, epochs=1)
@@ -50,11 +51,9 @@ class AdafactorTest(tf.test.TestCase):
         optimizer = AdafactorOptimizer()
         config = optimizer.get_config()
         self.assertIn("learning_rate",config)
-        self.assertIn("multiply_by_parameter_scale",config)
         self.assertIn("decay_rate",config)
         self.assertIn("beta1",config)
         self.assertIn("clipping_threshold",config)
-        self.assertIn("factored",config)
         self.assertIn("epsilon1",config)
         self.assertIn("epsilon2",config)
 
@@ -88,7 +87,6 @@ class AdafactorTest(tf.test.TestCase):
             self.evaluate(tf.compat.v1.global_variables_initializer())
             self.assertNotEqual(np.sum(np.absolute(val_0)),self.evaluate(tf.math.reduce_sum(tf.math.abs(var_0))))
             self.assertNotEqual(np.sum(np.absolute(val_1)),self.evaluate(tf.math.reduce_sum(tf.math.abs(var_1))))
-    
 
 if __name__ == "__main__":
     tf.test.main()
