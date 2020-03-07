@@ -21,10 +21,12 @@ from __future__ import print_function
 
 
 import tensorflow as tf
+from tensorflow.python.ops import math_ops
 from tensorflow_addons.utils import keras_utils
 import sys
 
 
+@tf.keras.utils.register_keras_serializable(package="Addons")
 class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
     """Optimizer that implements the Adafactor algorithm.
     Adafactor is described in https://arxiv.org/abs/1804.04235.
@@ -119,37 +121,58 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
                 present or both absent.
         """
         super(AdafactorOptimizer, self).__init__(name=name, **kwargs)
-        self._multiply_by_parameter_scale = multiply_by_parameter_scale
-        self._set_hyper("multiply_by_parameter_scale",multiply_by_parameter_scale)
 
+        # Set Flags
+        self.multiply_by_parameter_scale = multiply_by_parameter_scale
+        self.factored = factored
+        self.use_locking = use_locking
+        self.has_beta_1 = (beta1!=0.0)
+
+        # Set defaults
         if learning_rate is None:
             learning_rate = self._learning_rate_default(multiply_by_parameter_scale)
-        self._learning_rate = learning_rate
-        self._set_hyper("learning_rate",learning_rate)
 
         if decay_rate is None:
             decay_rate = self._decay_rate_default()
-        self._decay_rate = decay_rate
+
+        # Set Hypers
         self._set_hyper("decay_rate",decay_rate)
-        self._beta1 = beta1
-        self._set_hyper('beta1',beta1)
-        self._clipping_threshold = clipping_threshold
+        self._set_hyper("learning_rate",learning_rate)
+        self._set_hyper("beta1", beta1)
         self._set_hyper("clipping_threshold",clipping_threshold)
-        self._factored = factored
         self._set_hyper("factored",factored)
-        self._epsilon1 = epsilon1
         self._set_hyper("epsilon1",epsilon1)
-        self._epsilon2 = epsilon2
         self._set_hyper("epsilon2",epsilon2)
+
+    def _prepare_local(self, var_device, var_dtype, apply_state):
+        super()._prepare_local(var_device, var_dtype, apply_state)
+
+        local_step = math_ops.cast(self.iterations + 1, var_dtype)
+        learning_rate_t = tf.identity(self._get_hyper("learning_rate", var_dtype))
+        decay_rate_t = tf.identity(self._get_hyper("decay_rate", var_dtype))
+        beta_1_t = tf.identity(self._get_hyper("beta1", var_dtype))
+        clipping_threshold_t = tf.identity(self._get_hyper("clipping_threshold", var_dtype))
+        epsilon1_t = tf.identity(self._get_hyper("epsilon1", var_dtype))
+        epsilon2_t = tf.identity(self._get_hyper("epsilon2", var_dtype))
+
+        apply_state[(var_device, var_dtype)].update(
+            dict(
+                learning_rate = learning_rate_t,
+                decay_rate = decay_rate_t,
+                beta1 = beta_1_t,
+                clipping_threshold = clipping_threshold_t,
+                epsilon1 = epsilon1_t,
+                epsilon2 = epsilon2_t,
+            )
+        )
+
 
     def get_config(self):
         config = {
                 "learning_rate": self._serialize_hyperparameter("learning_rate"),
-                "multiply_by_parameter_scale": self._serialize_hyperparameter("multiply_by_parameter_scale"),
                 "decay_rate": self._serialize_hyperparameter("decay_rate"),
                 "beta1": self._serialize_hyperparameter("beta1"),
                 "clipping_threshold": self._serialize_hyperparameter("clipping_threshold"),
-                "factored": self._serialize_hyperparameter("factored"),
                 "epsilon1": self._serialize_hyperparameter("epsilon1"),
                 "epsilon2": self._serialize_hyperparameter("epsilon2")
         }
@@ -164,14 +187,13 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
         Returns:
             a boolean
         """
-        return self._get_hyper("factored") and len(shape) >= 2
+        return self.factored and len(shape) >= 2
 
 
-    @tf.function
     def _create_slots(self, var_list):
         for var in var_list:
             shape = var.get_shape().as_list()
-            if self._get_hyper("beta1"):
+            if self.has_beta_1:
                 self.add_slot(var, "m")
             if self._should_use_factored_second_moment_estimate(shape):
                 r_val = tf.zeros(shape[:-1], dtype=tf.float32)
@@ -209,15 +231,19 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
         tf.cast(testy,tf.float32)
         return tf.maximum(reduce_rms(var), self._get_hyper("epsilon2"))
 
-    def _resource_apply_dense(self, grad, handle):
-        var = handle
+    def _resource_apply_dense(self, grad, var, apply_state=None):
+        var_device, var_dtype = var.device, var.dtype.base_dtype
+        coefficients = (apply_state or {}).get(
+            (var_device, var_dtype)
+        ) or self._fallback_apply_state(var_device, var_dtype)
+
         grad = tf.cast(grad,tf.float32)
-        grad_squared = tf.square(grad) + self._get_hyper("epsilon1")
+        grad_squared = tf.square(grad) + coefficients["epsilon1"]
         grad_squared_mean = tf.reduce_mean(grad_squared)
-        decay_rate = self._get_hyper("decay_rate")
-        update_scale = self._get_hyper("learning_rate")
+        decay_rate = coefficients["decay_rate"]
+        update_scale = coefficients["learning_rate"]
         old_val = var
-        if self._get_hyper("multiply_by_parameter_scale"):
+        if self.multiply_by_parameter_scale:
             scale_factor = self._parameter_scale(old_val)
             update_scale *= tf.cast(scale_factor, tf.float32)
         # HACK: Make things dependent on grad.
@@ -234,13 +260,13 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
             grad_squared_row_mean = tf.reduce_mean(grad_squared, -1)
             vr = self.get_slot(var, "vr")
             new_vr = (decay_rate * vr + mixing_rate * grad_squared_row_mean)
-            vr_update = vr.assign(new_vr, use_locking=self._get_hyper("use_locking"))
+            vr_update = vr.assign(new_vr, use_locking = self.use_locking)
             updates.append(vr_update)
 
             grad_squared_col_mean = tf.reduce_mean(grad_squared, -2)
             vc = self.get_slot(var, "vc")
             new_vc = (decay_rate * vc + mixing_rate * grad_squared_col_mean)
-            vc_update = vc.assign(new_vc, use_locking=self._get_hyper("use_locking"))
+            vc_update = vc.assign(new_vc, use_locking=self.use_locking)
             updates.append(vc_update)
 
             long_term_mean = tf.reduce_mean(new_vr, -1, keepdims=True)
@@ -250,25 +276,25 @@ class AdafactorOptimizer(tf.keras.optimizers.Optimizer):
         else:
             v = self.get_slot(var, "v")
             new_v = decay_rate * v + mixing_rate * grad_squared
-            v_update = v.assign(new_v, use_locking=self._get_hyper("use_locking"))
+            v_update = v.assign(new_v, use_locking = self.use_locking)
             updates = [v_update]
             x = grad * tf.math.rsqrt(new_v)
 
-        if self._get_hyper("clipping_threshold") is not None:
-            clipping_denom = tf.maximum(1.0, reduce_rms(x) / self._get_hyper("clipping_threshold"))
+        if coefficients["clipping_threshold"] is not None:
+            clipping_denom = tf.maximum(1.0, reduce_rms(x) / coefficients["clipping_threshold"])
             x /= clipping_denom
         subtrahend = update_scale * x
 
-        if self._get_hyper("beta1"):
+        if self.has_beta_1:
             m = self.get_slot(var, "m")
-            new_m = self._get_hyper("beta1") * tf.to_float(m) + (1.0 - self._get_hyper("beta1")) * subtrahend
+            new_m = coefficients["beta1"] * tf.to_float(m) + (1.0 - coefficients["beta1"]) * subtrahend
             subtrahend = new_m
             new_m = self._cast_like(new_m, var)
-            m_update_value = m.assign(new_m, use_locking=self._get_hyper("use_locking"))
+            m_update_value = m.assign(new_m, use_locking=self.use_locking)
             updates.append(m_update_value)
 
         new_val = tf.cast(old_val,tf.float32) - subtrahend
-        new_val = var.assign(new_val, use_locking=self._get_hyper("use_locking"))
+        new_val = var.assign(new_val, use_locking=self.use_locking)
         updates = [new_val] + updates
         return tf.group(*updates)
 
